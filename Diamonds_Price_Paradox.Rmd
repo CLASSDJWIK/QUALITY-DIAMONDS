@@ -1,0 +1,451 @@
+---
+title: "The Diamond Price Paradox: Quality, Size, and Fair Comparisons"
+author: "Name Surname"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 10, fig.height = 5.5, dpi = 120)
+```
+
+```{r packages,  echo = FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(broom)
+library(knitr)
+library(scales)
+```
+
+# Research question
+
+Diamonds that exhibit the most sought-after characteristics in terms of cut, color, and clarity sell for higher prices, provided all other conditions are identical.
+However, when analyzing the average price in the `ggplot2::diamonds` dataset, one can occasionally observe some discrepancies. The question is whether the “better” diamonds are actually selling for lower prices or whether we are simply comparing diamonds that differ in another important indicator. We’ll start by analyzing the observed prices, then compare similar diamonds, and finally use a regression model to analyze size and quality together.
+
+
+```{r data}
+d <- ggplot2::diamonds |>
+  mutate(
+    cut = factor(as.character(cut), levels = c("Fair", "Good", "Very Good", "Premium", "Ideal")),
+    color = factor(as.character(color), levels = c("J", "I", "H", "G", "F", "E", "D")),
+    clarity = factor(as.character(clarity), levels = c("I1", "SI2", "SI1", "VS2", "VS1", "VVS2", "VVS1", "IF")),
+    volume = x * y * z
+  )
+quality_palette <- c("Fair"="#B45309", "Good"="#E0A526", "Very Good"="#0891B2", "Premium"="#6366F1", "Ideal"="#166534")
+```
+
+# I. Observation: the apparent paradox
+
+## Mean price by quality
+
+```{r mean-price-summary,  echo=FALSE}
+mean_grade <- function(data, var, dimension) {
+  data |>
+    group_by(grade = {{ var }}) |>
+    summarise(n = n(), mean_price = mean(price), .groups = "drop") |>
+    mutate(dimension = dimension, grade = as.character(grade))
+}
+raw_means <- bind_rows(
+  mean_grade(d, cut, "Cut"),
+  mean_grade(d, color, "Color"),
+  mean_grade(d, clarity, "Clarity")
+)
+# The summary is used for the chart below; no redundant table is printed. 
+```
+
+```{r mean-price-plots, fig.height=5}
+raw_means |>
+  mutate(grade = factor(grade, levels = unique(grade))) |>
+  ggplot(aes(grade, mean_price, fill = dimension)) +
+  geom_col(width = .72, show.legend = FALSE) +
+  facet_wrap(~ dimension, scales = "free_x", nrow = 1) +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title = "Average price by diamond quality", x = "Grade (worst to best)", y = "Mean price (USD)") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**What we see.** The bars do not follow the quality ranking we might expect. Ideal-cut diamonds, for example, average about $3,458, compared with $4,359 for Fair-cut diamonds. So does it mean  that a cheaper cut makes a diamond expensive. 
+
+## Price distributions by quality
+
+```{r boxplots, fig.height=9}
+d |>
+  select(price, cut, color, clarity) |>
+  pivot_longer(cols = c(cut, color, clarity), names_to = "dimension", values_to = "grade") |>
+  mutate(dimension = factor(dimension, levels = c("cut", "color", "clarity"))) |>
+  ggplot(aes(grade, price)) +
+  geom_boxplot(fill = "#BFDBFE", outlier.alpha = .07) +
+  stat_summary(fun = mean, geom = "point", color = "#DC2626", size = 2) +
+  facet_wrap(~ dimension, scales = "free_x", ncol = 1) +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title = "Price distributions (red points indicate group means)", x = "Quality grade", y = "Price (USD)") +
+  theme_minimal(base_size = 12)
+```
+
+**What we see.** Most LOW QUALITY DIAMONDS have valuable prices like in CLARITY OR COLOR. This variation is our first indication that quality grades alone cannot tell the whole story.
+
+## Pearson correlation matrix
+
+```{r correlations}
+numeric_vars <- d |> select(price, carat, x, y, z, depth, table, volume)
+cor_mat <- cor(numeric_vars, use = "complete.obs", method = "pearson")
+cor_long <- as.data.frame(as.table(cor_mat))
+ggplot(cor_long, aes(Var1, Var2, fill = Freq)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", Freq)), size = 3) +
+  scale_fill_gradient2(low = "#FDE047", mid = "#FEFCE8", high = "#15803D", midpoint = 0, limits = c(-1,1)) +
+  coord_equal() +
+  labs(title = "Pearson correlations among numeric variables", x = NULL, y = NULL, fill = "r") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+**What we observe.** Carat weight is strongly positively correlated with price. It is also closely correlated with the diamond's registered dimensions, which is to be expected, since both indicators describe size. This offers a credible explanation for the unusual averages
+
+## Price versus carat and geometric volume
+
+```{r size-scatter, fig.height=6}
+d |>
+  ggplot(aes(carat, price)) +
+  geom_point(alpha = .07, size = .55, color = "#2563EB") +
+  facet_wrap(~ cut) +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title = "Price versus carat, faceted by cut", x = "Carat", y = "Price (USD)") +
+  theme_minimal()
+```
+
+```{r volume-scatter, fig.height=6}
+d |>
+  filter(is.finite(volume), volume > 0) |>
+  ggplot(aes(volume, price)) +
+  geom_point(alpha = .07, size = .55, color = "#0F766E") +
+  facet_wrap(~ cut) +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title = "Price versus geometric volume, faceted by cut", x = "x × y × z (mm³; bounding-box proxy)", y = "Price (USD)") +
+  theme_minimal()
+```
+
+
+On the box plots  we see a large correlation between carat  and price  thats  tends to a linear regression explanation.  So can we conclude that  heavier  is the carat ,  more expensive the price is. Same reasoning for the volume but much clear for carat
+
+## Linear and log-log views of the price–carat relationship
+
+```{r linear-log, fig.height=5}
+ggplot(d, aes(carat, price)) +
+  geom_point(alpha = .06, size = .5, color = "#64748B") +
+  geom_smooth(method = "lm", se = FALSE, color = "#DC2626") +
+  scale_y_continuous(labels = label_dollar()) +
+  labs(title = "Price and carat on linear scales", x = "Carat", y = "Price (USD)") +
+  theme_minimal()
+```
+
+```{r log-log, fig.height=5}
+ggplot(d, aes(carat, price)) +
+  geom_point(alpha = .06, size = .5, color = "#64748B") +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, color = "#DC2626") +
+  scale_x_log10() + scale_y_log10(labels = label_dollar()) +
+  labs(title = "Log-log price–carat relationship", subtitle = "The straight trend on log-log axes corresponds to a power-law trend on the original scale", x = "Carat (log scale)", y = "Price (USD; log scale)") +
+  theme_minimal()
+```
+
+**Why the scale matters.** The log-log view makes the relationship price rises with carat in a curved pattern and the spread of prices increases for larger stones. 
+
+# II. Explanation: controlling for size
+
+## Carat and volume summaries by quality
+
+```{r quality-summary}
+quality_summary <- function(data, var) {
+  data |>
+    group_by(grade = {{ var }}) |>
+    summarise(n = n(), mean_carat = mean(carat), median_carat = median(carat),
+              mean_volume = mean(volume), median_volume = median(volume),
+              mean_price = mean(price), .groups = "drop")
+}
+# Highlight the two largest entries in each selected column, within each table.
+highlight_top2 <- function(tab) {
+  highlight_cols <- c("mean_carat", "median_carat", "mean_volume", "mean_price")
+  thresholds <- vapply(tab[highlight_cols], function(v) sort(v, decreasing = TRUE)[min(2, length(v))], numeric(1))
+  for (nm in highlight_cols) {
+    tab[[nm]] <- ifelse(tab[[nm]] >= thresholds[[nm]],
+                        paste0("<strong style='background:#FEF3C7;padding:2px 4px;'>", sprintf("%.2f", tab[[nm]]), "</strong>"),
+                        sprintf("%.2f", tab[[nm]]))
+  }
+  tab
+}
+```
+
+### Cut
+
+```{r cut-summary}
+kable(highlight_top2(quality_summary(d, cut)), escape = FALSE,
+      caption = "Carat, volume, and price by cut; bold indicates the top two values")
+```
+Bold values indidicates us having much carat involves our price  where the 2nd mean_carat 0.89 of Cut Premium  have the highest price. Good
+
+### Color
+
+```{r color-summary}
+kable(highlight_top2(quality_summary(d, color)), escape = FALSE,
+      caption = "Carat, volume, and price by color; bold indicates the top two values")
+```
+
+Here the same pattern is  clear ,  more carat , more price
+
+### Clarity
+
+```{r clarity-summary}
+kable(highlight_top2(quality_summary(d, clarity)), escape = FALSE,
+      caption = "Carat, volume, and price by clarity; bold indicates the top two values")
+```
+
+
+
+## Mean price by cut within carat bands
+
+```{r carat-bands}
+d_bands <- d |>
+  mutate(carat_band = cut(carat, breaks = c(0, .5, 1, 1.5, 2, Inf),
+                         labels = c("0–0.5 ct", "0.5–1.0 ct", "1.0–1.5 ct", "1.5–2.0 ct", "2.0+ ct"),
+                         include.lowest = TRUE, right = TRUE))
+band_summary <- d_bands |>
+  group_by(carat_band, cut) |>
+  summarise(n = n(), mean_carat = mean(carat), mean_price = mean(price), .groups = "drop")
+ggplot(band_summary, aes(cut, mean_price, fill = cut)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ carat_band, scales = "free_y") +
+  scale_fill_manual(values = quality_palette) +
+  scale_y_continuous(labels = label_dollar(), expand = expansion(mult = c(0, .14))) +
+  labs(title = "Mean price by cut within carat bands", x = "Cut", y = "Mean price (USD)") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**A fairer first comparison.** Grouping diamonds by carat makes the cut comparison more meaningful than comparing overall averages. Within some weight bands, higher cut grades also have higher mean prices. These are still broad bands, however, so diamonds within the same panel may differ in exact weight, color, and clarity.
+
+## Observed diamonds with exactly equal carat weight
+
+The following comparisons use *exact recorded carat values*, not broad bins. All observed cut groups are shown at 0.50, 1.00, 1.50, and 2.00 carats. The comparison keeps carat weight fixed, although color and clarity can still vary between diamonds.
+
+```{r exact-carat-summary}
+selected_carats <- c(.50, 1.00, 1.50, 2.00)
+exact_summary <- d |>
+  filter(carat %in% selected_carats) |>
+  group_by(carat, cut) |>
+  summarise(n = n(), mean_price = mean(price), median_price = median(price), .groups = "drop")
+```
+
+```{r exact-carat-chart, fig.height=6}
+ggplot(exact_summary, aes(cut, mean_price, fill = cut)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ carat, labeller = labeller(carat = function(x) paste0(x, " ct")), scales = "free_y") +
+  scale_fill_manual(values = quality_palette) +
+  scale_y_continuous(labels = label_dollar(), expand = expansion(mult = c(0, .14))) +
+  labs(title = "Observed mean price by cut at exactly equal carat", subtitle = "Color and clarity are not controlled in this comparison", x = "Cut", y = "Mean observed price (USD)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**What this adds.** Each panel now compares diamonds with exactly the same recorded carat weight. This removes differences in weight from the comparison and makes the relationship between cut and price easier to see. The overall averages had hidden this pattern because the cut groups contained diamonds of different sizes. Color and clarity may still differ, so the next step is to match those characteristics as well.
+
+## Exact carat, color, and clarity: four matched observed groups
+
+We now compare **four observed groups**, keeping the recorded carat, color, and clarity identical *within each group*. The first group is deliberately fixed at **1.00 carat, E color, SI2 clarity**, which contains 104 diamonds and all five cut grades in the reference dataset. The other three groups are selected automatically from the remaining observed combinations
+
+```{r four-matched-groups}
+matched_candidates <- d |>
+  group_by(carat, color, clarity, cut) |>
+  summarise(n = n(), mean_price = mean(price), .groups = "drop") |>
+  group_by(carat, color, clarity) |>
+  summarise(n_cuts = n_distinct(cut), total_n = sum(n),
+            min_cut_n = min(n), .groups = "drop") |>
+  filter(n_cuts >= 2) |>
+  arrange(desc(n_cuts), desc(min_cut_n), desc(total_n))
+
+anchor <- matched_candidates |>
+  filter(abs(carat - 1) < 1e-9, color == "E", clarity == "SI2")
+stopifnot(nrow(anchor) == 1, anchor$n_cuts == 5)
+
+# Choose three additional observed groups with distinct carat weights.
+# Prefer five represented cuts, then better minimum cell counts and total size.
+others <- matched_candidates |>
+  filter(abs(carat - 1) > 1e-9) |>
+  arrange(desc(n_cuts), desc(min_cut_n), desc(total_n)) |>
+  group_by(carat) |>
+  slice_head(n = 1) |>
+  ungroup() |>
+  arrange(desc(n_cuts), desc(min_cut_n), desc(total_n)) |>
+  slice_head(n = 3)
+stopifnot(nrow(others) == 3)
+
+selected_groups <- bind_rows(anchor, others) |>
+  mutate(group_id = paste0("Group ", row_number()),
+         group_label = paste0(group_id, ": ", format(carat, nsmall = 2),
+                              " ct | ", color, " | ", clarity))
+
+matched_four <- d |>
+  inner_join(selected_groups |>
+               select(carat, color, clarity, group_id, group_label),
+             by = c("carat", "color", "clarity")) |>
+  group_by(group_id, group_label, carat, color, clarity, cut) |>
+  summarise(n = n(), mean_price = mean(price), .groups = "drop")
+
+knitr::kable(selected_groups |>
+               select(group_id, carat, color, clarity, n_cuts, total_n),
+             caption = "Four matched observed groups")
+```
+
+```{r four-matched-chart, fig.height=8, fig.width=11}
+matched_four |>
+  mutate(group_label = factor(group_label, levels = selected_groups$group_label)) |>
+  ggplot(aes(cut, mean_price, fill = cut)) +
+  geom_col(show.legend = FALSE, width = .72) +
+  geom_text(aes(label = paste0("n=", n)), vjust = -.35, size = 3.2) +
+  facet_wrap(~ group_label, ncol = 2, scales = "free_y") +
+  scale_fill_manual(values = quality_palette) +
+  scale_y_continuous(labels = label_dollar(),
+                     expand = expansion(mult = c(0, .18))) +
+  labs(title = "Observed prices within four exactly matched groups",
+       subtitle = "Within each panel, carat, color and clarity are identical; only cut varies",
+       x = "Cut quality", y = "Observed mean price (USD)") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+```
+
+**Why these four groups matter.** Now we compare the diamonds with the same three characteristics: carat weight, colour and clarity. In each category, the only difference is the cut. For example, the first group has 104 diamonds of 1.00 carats, colour E, clarity SI2. The top row of numbers indicates how many diamonds were included in each average; if an average is based on too few diamonds, it is not very reliable. This variation allows us to distinguish between very similar diamonds, but it is for visual reference only, as the four panels show a mixture of different characteristics.
+
+
+
+## One explanatory model: carat and all quality attributes
+
+We fit a single model on the complete diamonds dataset:
+
+\[
+M_1: \log(price) = \beta_0 + \beta_1\log(carat) + f(cut) + g(color) + h(clarity) + \varepsilon.
+\]
+
+The categorical predictors use treatment contrasts with reference levels `Fair`, `J`, and `I1`. Their individual reference coefficients are zero by definition. The intercept is the fitted log price for a one-carat diamond in the combined reference category.
+
+```{r model-fit}
+m_full <- lm(log(price) ~ log(carat) + cut + color + clarity, data = d)
+fit <- broom::glance(m_full)
+knitr::kable(tibble(n = nobs(m_full), R2_log = fit$r.squared,
+                    adjusted_R2_log = fit$adj.r.squared,
+                    residual_SE_log = fit$sigma), digits = 4,
+             caption = "Fit of M1 on the log-price scale")
+knitr::kable(broom::tidy(m_full) |>
+               select(term, estimate, std.error, statistic),
+             digits = 4, caption = "M1 regression coefficients (Fair, J and I1 are reference levels)")
+```
+
+**Reading the model.** The model fits the logged prices closely ($R^2 = 0.9826$), However, this does not mean that this model predicts dollar prices perfectly accurately. The coefficient for ‘log(carat)’ is approximately 1.88: Each 1% increase in carat weight causes the price to increase by approximately 1. 88%, provided that the diamond's size, color, and clarity remain unchanged. The price coefficients compare each of the cut, color, and clarity grades with the corresponding standard grade (specifically, `Fair`, `J` and `I1`). These are adjusted correlations, not causal relationships.
+
+## Model diagnostics: residuals and normal Q-Q plot
+
+Residuals are observed minus fitted **log(price)**. 
+
+```{r residual-diagnostics, fig.height=5.2}
+model_diag <- tibble(fitted_log = fitted(m_full), residual_log = residuals(m_full))
+ggplot(model_diag, aes(fitted_log, residual_log)) +
+  geom_point(alpha = .09, size = .5, color = "#475569") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "#DC2626") +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE,
+              color = "#2563EB", linewidth = .8) +
+  labs(title = "M1: residuals versus fitted log-price",
+       x = "Fitted log(price)", y = "Residual log(price)") +
+  theme_minimal(base_size = 12)
+```
+
+```{r qq-diagnostics, fig.height=5.2}
+ggplot(model_diag, aes(sample = residual_log)) +
+  stat_qq(alpha = .12, size = .65, color = "#475569") +
+  stat_qq_line(color = "#DC2626", linewidth = 1) +
+  labs(title = "M1: normal Q-Q plot of residuals",
+       x = "Theoretical normal quantiles", y = "Sample residual quantiles") +
+  theme_minimal(base_size = 12)
+```
+
+**Checking the model.** The residual plot and Q-Q plot remind us that a strong overall fit is not the same as a perfect model. Any systematic pattern in the residuals or departures from the Q-Q reference line indicate aspects of the prices that this simple specification does not capture.
+## The paradox resolved: raw versus adjusted quality differences
+
+This is the key answer to the challenge. We compare the **best grade against the worst grade** in each quality dimension, first using the observed group mean prices and then using the regression model to account for diamond weight and the other quality characteristics.
+
+**Raw (unadjusted) comparison.** We divide the average price of all diamonds in the best grade by the average price of all diamonds in the worst grade, subtract one and multiply by 100. For example, the raw Ideal-versus-Fair comparison mixes diamonds of many different weights, colors and clarities. A negative result means that the *observed average* price in the best-quality group is lower.
+
+\[
+\text{Raw difference (\%)}=100\left(\frac{\overline{price}_{best}}{\overline{price}_{worst}}-1\right).
+\]
+
+**Adjusted (model-based) comparison.** We use the coefficient for the best grade in M1, relative to its worst-grade reference category. Because M1 predicts log(price), we exponentiate the coefficient to obtain a conditional price ratio. The comparison holds carat and the other two quality characteristics constant. A positive result means that the better grade is associated with a higher *conditional* price, according to the fitted model.
+
+\[
+\text{Adjusted difference (\%)}=100\left(e^{\widehat\beta_{best}}-1\right).
+\]
+
+```{r raw-adjusted}
+raw_effect <- function(var, worst, best, label) {
+  tab <- d |>
+    group_by(grade = {{ var }}) |>
+    summarise(mean_price = mean(price), .groups = "drop")
+  tibble(comparison = label,
+         raw = 100 * (tab$mean_price[tab$grade == best] /
+                        tab$mean_price[tab$grade == worst] - 1))
+}
+raw_effects <- bind_rows(
+  raw_effect(cut, "Fair", "Ideal", "Ideal vs Fair"),
+  raw_effect(color, "J", "D", "D vs J"),
+  raw_effect(clarity, "I1", "IF", "IF vs I1")
+)
+adjusted_effects <- broom::tidy(m_full, conf.int = TRUE) |>
+  filter(term %in% c("cutIdeal", "colorD", "clarityIF")) |>
+  mutate(comparison = case_when(
+    term == "cutIdeal" ~ "Ideal vs Fair",
+    term == "colorD" ~ "D vs J",
+    term == "clarityIF" ~ "IF vs I1"
+  ), adjusted = 100 * (exp(estimate) - 1),
+  lower = 100 * (exp(conf.low) - 1),
+  upper = 100 * (exp(conf.high) - 1)) |>
+  select(comparison, adjusted, lower, upper)
+paradox <- left_join(raw_effects, adjusted_effects, by = "comparison")
+knitr::kable(paradox, digits = 2,
+             caption = "Raw mean-price differences and model-adjusted conditional price differences (%)")
+```
+
+```{r raw-adjusted-chart, fig.height=5.5}
+plot_effects <- paradox |>
+  select(comparison, raw, adjusted) |>
+  pivot_longer(c(raw, adjusted), names_to = "comparison_type", values_to = "percent") |>
+  mutate(comparison_type = factor(comparison_type, levels = c("raw", "adjusted"),
+                                  labels = c("Raw group means", "Adjusted M1")))
+ggplot(plot_effects, aes(comparison, percent, fill = comparison_type)) +
+  geom_col(position = position_dodge(width = .75), width = .65) +
+  geom_hline(yintercept = 0, color = "#334155") +
+  geom_text(aes(label = sprintf("%+.1f%%", percent)),
+            position = position_dodge(width = .75),
+            vjust = ifelse(plot_effects$percent >= 0, -.35, 1.35), size = 3.6) +
+  scale_fill_manual(values = c("Raw group means" = "#D97706", "Adjusted M1" = "#2563EB")) +
+  scale_y_continuous(labels = label_number(suffix = "%"),
+                     expand = expansion(mult = c(.09, .14))) +
+  labs(title = "The diamond price paradox: before and after adjustment",
+       subtitle = "Best versus worst grade in cut, color and clarity",
+       x = NULL, y = "Price difference (%)", fill = NULL) +
+  theme_minimal(base_size = 12)
+```
+
+**The answer to our question.** This is where the apparent contradiction disappears. In the raw data, Ideal-cut diamonds have an average price **20.68% lower** than Fair-cut diamonds. Once we account for carat, color and clarity, the model instead associates Ideal cut with a price **17.49% higher** than Fair cut. The same reversal appears for color (D versus J: **−40.46%** raw, **+66.69%** adjusted) and clarity (IF versus I1: **−27.00%** raw, **+204.57%** adjusted). The raw percentages compare arithmetic group means; the adjusted percentages are conditional price ratios from a log-price model, so they are not identical statistical quantities. Still, the direction change, together with the size summaries and matched comparisons, strongly supports the explanation: **the best-quality groups often contain smaller diamonds, and size has a major influence on price**. This is an observational result, not proof that changing a grade would cause a particular price increase.
+
+# Conclusion
+
+
+This discrepancy stems from incomplete data collection and inappropriate comparison methods. If we calculate the average price across all quality grades, we end up lumping together diamonds that vary greatly in size. In this dataset, some of the higher quality grades include very small diamonds, whose weight often pulls down the average price. This fluctuation is evident in the scatter plot, the quality grade summary, and the related export data. When carat weight and other quality factors are taken into account, regression analysis shows that higher quality grades correspond to higher prices. The significance of this study extends beyond the diamond industry: **when comparing similar items, sample averages may vary**.
